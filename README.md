@@ -2,6 +2,7 @@
 
 # Windows11 SnippingTool OCR
 
+blog post: https://b1tg.github.io/post/win11-oneocr/
 
 Tested on Win11 23H2 + SnippingTool 11.2409.25.0
 
