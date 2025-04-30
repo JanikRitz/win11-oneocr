@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include <filesystem>
 
 #include <Windows.h>
 #include <opencv2/opencv.hpp>
@@ -35,7 +36,7 @@ typedef __int64(__cdecl *OcrInitOptionsSetUseModelDelayLoad_t)(__int64, char);
 typedef __int64(__cdecl *CreateOcrPipeline_t)(__int64, __int64, __int64,
                                               __int64 *);
 
-void ocr(Img img) {
+void ocr(Img img, const string &output_file) {
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
@@ -113,6 +114,13 @@ void ocr(Img img) {
   res = GetOcrLineCount(instance, &lc);
   assert(res == 0);
   printf("Recognize %lld lines\n", lc);
+
+  ofstream out(output_file);
+  if (!out.is_open()) {
+    cerr << "Failed to open output file: " << output_file << endl;
+    return;
+  }
+
   for (__int64 lci = 0; lci < lc; lci++) {
     __int64 line = 0;
     __int64 v106 = 0;
@@ -123,7 +131,7 @@ void ocr(Img img) {
     __int64 line_content = 0;
     GetOcrLineContent(line, &line_content);
     char *lcs = reinterpret_cast<char *>(line_content);
-    printf("%02lld: %s\n", lci, lcs);
+    out << lcs << endl; // Write the recognized line to the output file
     // GetOcrLineBoundingBox(line, &v106);
     __int64 lr = 0;
     GetOcrLineWordCount(line, &lr);
@@ -136,6 +144,9 @@ void ocr(Img img) {
       GetOcrWordBoundingBox(v105, &v107);
     }
   }
+
+  out.close();
+  printf("OCR results saved to %s\n", output_file.c_str());
 }
 
 int main(int argc, char *argv[]) {
@@ -175,6 +186,9 @@ int main(int argc, char *argv[]) {
             .step = (__int64)step,
             .data_ptr = (__int64)reinterpret_cast<char *>(img_rgba.data)};
 
-  ocr(ig);
+  string file_name_str(file_name);
+  string output_file = filesystem::path(file_name_str).replace_extension(".txt").string();
+
+  ocr(ig, output_file);
   return 0;
 }
