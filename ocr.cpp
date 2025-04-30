@@ -36,7 +36,7 @@ typedef __int64(__cdecl *OcrInitOptionsSetUseModelDelayLoad_t)(__int64, char);
 typedef __int64(__cdecl *CreateOcrPipeline_t)(__int64, __int64, __int64,
                                               __int64 *);
 
-void ocr(Img img, const string &output_file) {
+void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
@@ -74,26 +74,8 @@ void ocr(Img img, const string &output_file) {
   GetOcrWordBoundingBox_t GetOcrWordBoundingBox =
       (GetOcrWordBoundingBox_t)GetProcAddress(hDLL, "GetOcrWordBoundingBox");
   __int64 ctx = 0;
-  __int64 pipeline = 0;
-  __int64 opt = 0;
   __int64 instance = 0;
-  __int64 res = CreateOcrInitOptions(&ctx);
-  assert(res == 0);
-  res = OcrInitOptionsSetUseModelDelayLoad(ctx, 0);
-  assert(res == 0);
-  // key: kj)TGtrK>f]b[Piow.gU+nC@s""""""4
-  const char *key = {"kj)TGtrK>f]b[Piow.gU+nC@s\"\"\"\"\"\"4"};
-  res = CreateOcrPipeline((__int64)"oneocr.onemodel", (__int64)key, ctx,
-                          &pipeline);
-  printf("OCR model loaded...\n");
-  // printf("res: %lld, ctx: 0x%llx, pipeline: 0x%llx\n", res, ctx, pipeline);
-  // The key is for the AI model, if key is not right, CreateOcrPipeline will
-  // return 6 with error message: Crypto.cpp:78 Check failed: meta->magic_number
-  // == MAGIC_NUMBER (0 vs. 1) Unable to uncompress. Source data mismatch.
-  res = CreateOcrProcessOptions(&opt);
-  assert(res == 0);
-  res = OcrProcessOptionsSetMaxRecognitionLineCount(opt, 1000);
-  assert(res == 0);
+  __int64 res = 0;
 #ifdef DEBUG
   __int16 *ibs = reinterpret_cast<__int16 *>(&img);
   for (int i = 0; i < 8; i++) {
@@ -149,19 +131,11 @@ void ocr(Img img, const string &output_file) {
   printf("OCR results saved to %s\n", output_file.c_str());
 }
 
-int main(int argc, char *argv[]) {
-  //  char* file_name = "a1.png";
-  char *file_name = NULL;
-  if (argc > 1) {
-    file_name = argv[1];
-  } else {
-    printf("Usage: ocr.exe <abc.png>\n");
-    return 0;
-  }
+void process_image(const string &file_name, __int64 pipeline, __int64 opt) {
   Mat img = imread(file_name, IMREAD_UNCHANGED);
   if (img.empty()) {
-    cout << "can't read image!" << endl;
-    return -1;
+    cout << "Can't read image: " << file_name << endl;
+    return;
   }
 
   Mat img_rgba;
@@ -170,15 +144,14 @@ int main(int argc, char *argv[]) {
   } else if (img.channels() == 4) {
     img_rgba = img;
   } else {
-    cout << "image type not support" << endl;
-    return -1;
+    cout << "Image type not supported: " << file_name << endl;
+    return;
   }
 
   int rows = img_rgba.rows;
   int cols = img_rgba.cols;
   size_t step = img_rgba.step;
 
-  size_t fileSize = rows * step;
   Img ig = {.t = 3,
             .col = cols,
             .row = rows,
@@ -186,9 +159,69 @@ int main(int argc, char *argv[]) {
             .step = (__int64)step,
             .data_ptr = (__int64)reinterpret_cast<char *>(img_rgba.data)};
 
-  string file_name_str(file_name);
-  string output_file = filesystem::path(file_name_str).replace_extension(".txt").string();
+  string output_file = filesystem::path(file_name).replace_extension(".txt").string();
+  ocr(ig, output_file, pipeline, opt);
+}
 
-  ocr(ig, output_file);
+int main(int argc, char *argv[]) {
+  if (argc < 2) {
+    printf("Usage: ocr.exe <image_path_or_folder>\n");
+    return 0;
+  }
+
+  string input_path = argv[1];
+  vector<string> image_files;
+
+  if (filesystem::is_directory(input_path)) {
+    for (const auto &entry : filesystem::directory_iterator(input_path)) {
+      if (entry.is_regular_file() && 
+          (entry.path().extension() == ".png" || entry.path().extension() == ".jpg")) {
+        image_files.push_back(entry.path().string());
+      }
+    }
+  } else if (filesystem::is_regular_file(input_path)) {
+    image_files.push_back(input_path);
+  } else {
+    cout << "Invalid path: " << input_path << endl;
+    return -1;
+  }
+
+  HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
+  if (hDLL == NULL) {
+    cerr << "Failed to load DLL: " << GetLastError() << endl;
+    return -1;
+  }
+
+  CreateOcrInitOptions_t CreateOcrInitOptions =
+      (CreateOcrInitOptions_t)GetProcAddress(hDLL, "CreateOcrInitOptions");
+  CreateOcrPipeline_t CreateOcrPipeline =
+      (CreateOcrPipeline_t)GetProcAddress(hDLL, "CreateOcrPipeline");
+  CreateOcrProcessOptions_t CreateOcrProcessOptions =
+      (CreateOcrProcessOptions_t)GetProcAddress(hDLL, "CreateOcrProcessOptions");
+  OcrInitOptionsSetUseModelDelayLoad_t OcrInitOptionsSetUseModelDelayLoad =
+      (OcrInitOptionsSetUseModelDelayLoad_t)GetProcAddress(hDLL, "OcrInitOptionsSetUseModelDelayLoad");
+  OcrProcessOptionsSetMaxRecognitionLineCount_t OcrProcessOptionsSetMaxRecognitionLineCount =
+      (OcrProcessOptionsSetMaxRecognitionLineCount_t)GetProcAddress(hDLL, "OcrProcessOptionsSetMaxRecognitionLineCount");
+
+  __int64 ctx = 0, pipeline = 0, opt = 0;
+  __int64 res = CreateOcrInitOptions(&ctx);
+  assert(res == 0);
+  res = OcrInitOptionsSetUseModelDelayLoad(ctx, 0);
+  assert(res == 0);
+
+  const char *key = {"kj)TGtrK>f]b[Piow.gU+nC@s\"\"\"\"\"\"4"};
+  res = CreateOcrPipeline((__int64)"oneocr.onemodel", (__int64)key, ctx, &pipeline);
+  assert(res == 0);
+  printf("OCR model loaded...\n");
+
+  res = CreateOcrProcessOptions(&opt);
+  assert(res == 0);
+  res = OcrProcessOptionsSetMaxRecognitionLineCount(opt, 1000);
+  assert(res == 0);
+
+  for (const auto &file_name : image_files) {
+    process_image(file_name, pipeline, opt);
+  }
+
   return 0;
 }
