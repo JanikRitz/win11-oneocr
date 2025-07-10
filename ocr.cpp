@@ -55,53 +55,76 @@ double calculateDistance(const OcrLineData& line1, const OcrLineData& line2) {
 }
 
 // Function to group lines by proximity (for speech bubbles)
-vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, double maxDistance = 100.0) {
+vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, int imageHeight, double maxDistancePercent = 0.1) {
+  double maxDistance = imageHeight * maxDistancePercent;
   vector<vector<OcrLineData>> groups;
   vector<bool> used(lines.size(), false);
   
-  printf("\n=== Grouping %zu lines with maxDistance=%.2f ===\n", lines.size(), maxDistance);
+  printf("\n=== Grouping %zu lines with maxDistance=%.2f (%.1f%% of image height %d) ===\n", 
+         lines.size(), maxDistance, maxDistancePercent * 100, imageHeight);
   
   for (size_t i = 0; i < lines.size(); i++) {
     if (used[i]) continue;
-    
+
     vector<OcrLineData> currentGroup;
     currentGroup.push_back(lines[i]);
     used[i] = true;
-    
-    printf("\nStarting new group %zu with line: '%s' at (%.1f,%.1f)\n", 
-           groups.size() + 1, lines[i].content.substr(0, 30).c_str(), 
+
+    printf("\nStarting new group %zu with line: '%s' at (%.1f,%.1f)\n",
+           groups.size() + 1, lines[i].content.substr(0, 30).c_str(),
            lines[i].center_x, lines[i].center_y);
-    
+
     // Find all lines close to the current group
     bool foundNew = true;
     while (foundNew) {
       foundNew = false;
       for (size_t j = 0; j < lines.size(); j++) {
         if (used[j]) continue;
-        
+
+        // Calculate the vertical span of the current group (distance between highest and lowest line)
+        float minY = currentGroup[0].center_y;
+        float maxY = currentGroup[0].center_y;
+        for (const auto& groupLine : currentGroup) {
+          minY = min(minY, groupLine.center_y);
+          maxY = max(maxY, groupLine.center_y);
+        }
+        float verticalSpan = maxY - minY;
+        float verticalCompensation = 0.5f * verticalSpan;
+
         // Check if this line is close to any line in the current group
         for (const auto& groupLine : currentGroup) {
-          double dist = calculateDistance(lines[j], groupLine);
-          if (dist <= maxDistance) {
-            printf("  -> Adding '%s' to group (distance: %.2f <= %.2f)\n", 
-                   lines[j].content.substr(0, 30).c_str(), dist, maxDistance);
+          float dx = lines[j].center_x - groupLine.center_x;
+          float dy = lines[j].center_y - groupLine.center_y;
+          float dist = sqrt(dx * dx + dy * dy);
+          float compensatedMaxDistance = maxDistance;
+          // If the candidate is vertically offset, allow more distance
+          if (fabs(dy) > 0) {
+            compensatedMaxDistance += verticalCompensation;
+          }
+          printf("    Checking '%s' vs group line '%s': dist=%.2f, compensatedMax=%.2f (dy=%.2f, verticalComp=%.2f, span=%.2f)\n",
+                 lines[j].content.substr(0, 20).c_str(), groupLine.content.substr(0, 20).c_str(),
+                 dist, compensatedMaxDistance, dy, verticalCompensation, verticalSpan);
+          if (dist <= compensatedMaxDistance) {
+            printf("  -> Adding '%s' to group (distance: %.2f <= %.2f)\n",
+                   lines[j].content.substr(0, 30).c_str(), dist, compensatedMaxDistance);
             currentGroup.push_back(lines[j]);
             used[j] = true;
             foundNew = true;
             break;
           }
         }
+        if (foundNew) break;
       }
     }
-    
+
     printf("  Group %zu completed with %zu lines\n", groups.size() + 1, currentGroup.size());
-    
+
     // Sort lines in the group by vertical position (top to bottom)
-    sort(currentGroup.begin(), currentGroup.end(), 
+    sort(currentGroup.begin(), currentGroup.end(),
          [](const OcrLineData& a, const OcrLineData& b) {
            return a.center_y < b.center_y;
          });
-    
+
     groups.push_back(currentGroup);
   }
   
@@ -125,6 +148,9 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
     return;
   }
+  
+  // Store image height for maxDistance calculation
+  int imageHeight = img.row;
   // Get function pointers
   CreateOcrInitOptions_t CreateOcrInitOptions =
       (CreateOcrInitOptions_t)GetProcAddress(hDLL, "CreateOcrInitOptions");
@@ -255,19 +281,24 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   }
 
   // Group lines by proximity
-  vector<vector<OcrLineData>> groupedLines = groupLinesByProximity(allLines);
+  vector<vector<OcrLineData>> groupedLines = groupLinesByProximity(allLines, imageHeight);
   
-  // Write grouped results to output file
+  // Write grouped results to output file with space between groups, all lowercase
   for (size_t groupIdx = 0; groupIdx < groupedLines.size(); groupIdx++) {
     if (groupIdx > 0) {
-      out << endl; // Add blank line between groups (speech bubbles)
+      out << " "; // Add space between groups (speech bubbles)
     }
-    
-    for (const auto& line : groupedLines[groupIdx]) {
-      out << line.content << endl;
+    for (size_t lineIdx = 0; lineIdx < groupedLines[groupIdx].size(); lineIdx++) {
+      string lineContent = groupedLines[groupIdx][lineIdx].content;
+      // Convert to lowercase
+      transform(lineContent.begin(), lineContent.end(), lineContent.begin(), ::tolower);
+      out << lineContent;
+      // Add space between lines in a group, except after the last line
+      if (lineIdx < groupedLines[groupIdx].size() - 1) {
+        out << " ";
+      }
     }
   }
-
   out.close();
   printf("OCR results saved to %s\n", output_file.c_str());
 }
