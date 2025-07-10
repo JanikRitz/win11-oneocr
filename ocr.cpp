@@ -3,6 +3,8 @@
 #include <iostream>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
+#include <cmath>
 
 #include <Windows.h>
 #include <opencv2/opencv.hpp>
@@ -18,6 +20,13 @@ typedef struct {
   __int64 step;
   __int64 data_ptr;
 } Img;
+
+// Structure to hold OCR line data with bounding box
+typedef struct {
+  string content;
+  float x, y, width, height;
+  float center_x, center_y;
+} OcrLineData;
 
 typedef __int64(__cdecl *CreateOcrInitOptions_t)(__int64 *);
 typedef __int64(__cdecl *GetOcrLineCount_t)(__int64, __int64 *);
@@ -35,6 +44,80 @@ typedef __int64(__cdecl *CreateOcrProcessOptions_t)(__int64 *);
 typedef __int64(__cdecl *OcrInitOptionsSetUseModelDelayLoad_t)(__int64, char);
 typedef __int64(__cdecl *CreateOcrPipeline_t)(__int64, __int64, __int64,
                                               __int64 *);
+
+// Function to calculate distance between two lines
+double calculateDistance(const OcrLineData& line1, const OcrLineData& line2) {
+  double dist = sqrt(pow(line1.center_x - line2.center_x, 2) + pow(line1.center_y - line2.center_y, 2));
+  printf("Distance between '%s' (%.1f,%.1f) and '%s' (%.1f,%.1f): %.2f\n", 
+         line1.content.substr(0, 20).c_str(), line1.center_x, line1.center_y,
+         line2.content.substr(0, 20).c_str(), line2.center_x, line2.center_y, dist);
+  return dist;
+}
+
+// Function to group lines by proximity (for speech bubbles)
+vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, double maxDistance = 100.0) {
+  vector<vector<OcrLineData>> groups;
+  vector<bool> used(lines.size(), false);
+  
+  printf("\n=== Grouping %zu lines with maxDistance=%.2f ===\n", lines.size(), maxDistance);
+  
+  for (size_t i = 0; i < lines.size(); i++) {
+    if (used[i]) continue;
+    
+    vector<OcrLineData> currentGroup;
+    currentGroup.push_back(lines[i]);
+    used[i] = true;
+    
+    printf("\nStarting new group %zu with line: '%s' at (%.1f,%.1f)\n", 
+           groups.size() + 1, lines[i].content.substr(0, 30).c_str(), 
+           lines[i].center_x, lines[i].center_y);
+    
+    // Find all lines close to the current group
+    bool foundNew = true;
+    while (foundNew) {
+      foundNew = false;
+      for (size_t j = 0; j < lines.size(); j++) {
+        if (used[j]) continue;
+        
+        // Check if this line is close to any line in the current group
+        for (const auto& groupLine : currentGroup) {
+          double dist = calculateDistance(lines[j], groupLine);
+          if (dist <= maxDistance) {
+            printf("  -> Adding '%s' to group (distance: %.2f <= %.2f)\n", 
+                   lines[j].content.substr(0, 30).c_str(), dist, maxDistance);
+            currentGroup.push_back(lines[j]);
+            used[j] = true;
+            foundNew = true;
+            break;
+          }
+        }
+      }
+    }
+    
+    printf("  Group %zu completed with %zu lines\n", groups.size() + 1, currentGroup.size());
+    
+    // Sort lines in the group by vertical position (top to bottom)
+    sort(currentGroup.begin(), currentGroup.end(), 
+         [](const OcrLineData& a, const OcrLineData& b) {
+           return a.center_y < b.center_y;
+         });
+    
+    groups.push_back(currentGroup);
+  }
+  
+  printf("\n=== Created %zu groups total ===\n", groups.size());
+  
+  // Sort groups by their topmost line's position (left to right, then top to bottom)
+  sort(groups.begin(), groups.end(), 
+       [](const vector<OcrLineData>& a, const vector<OcrLineData>& b) {
+         if (abs(a[0].center_y - b[0].center_y) < 50) { // Same row
+           return a[0].center_x < b[0].center_x; // Left to right
+         }
+         return a[0].center_y < b[0].center_y; // Top to bottom
+       });
+  
+  return groups;
+}
 
 void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
@@ -97,6 +180,9 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   assert(res == 0);
   printf("Recognize %lld lines\n", lc);
 
+  // Collect all line data first
+  vector<OcrLineData> allLines;
+
   ofstream out(output_file);
   if (!out.is_open()) {
     cerr << "Failed to open output file: " << output_file << endl;
@@ -113,8 +199,39 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
     __int64 line_content = 0;
     GetOcrLineContent(line, &line_content);
     char *lcs = reinterpret_cast<char *>(line_content);
-    out << lcs << endl; // Write the recognized line to the output file
-    // GetOcrLineBoundingBox(line, &v106);
+    
+    // Get bounding box for this line
+    __int64 bbox_ptr = 0;
+    GetOcrLineBoundingBox(line, &bbox_ptr);
+    
+    OcrLineData lineData;
+    lineData.content = string(lcs);
+    
+    if (bbox_ptr) {
+      // Assuming bounding box is stored as [x, y, width, height]
+      float* bbox = reinterpret_cast<float*>(bbox_ptr);
+      lineData.width = bbox[0];
+      lineData.height = bbox[1];
+      lineData.x = bbox[2];
+      lineData.y = bbox[3];
+      lineData.center_x = lineData.x + lineData.width / 2;
+      lineData.center_y = lineData.y + lineData.height / 2;
+      printf("Line %lld: Got bounding box from API: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
+             lci, lineData.x, lineData.y, lineData.width, lineData.height);
+    } else {
+      // Fallback: use line index as approximate position
+      lineData.x = 0;
+      lineData.y = (int)lci * 20; // Approximate line height
+      lineData.width = 100;
+      lineData.height = 20;
+      lineData.center_x = 50;
+      lineData.center_y = lineData.y + 10;
+      printf("Line %lld: No bounding box available, using fallback: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
+             lci, lineData.x, lineData.y, lineData.width, lineData.height);
+    }
+    
+    allLines.push_back(lineData);
+    
     __int64 lr = 0;
     GetOcrLineWordCount(line, &lr);
     for (__int64 j = 0; j < lr; j++) {
@@ -124,6 +241,30 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
       GetOcrWord(line, j, &v105);
       GetOcrWordContent(v105, &lpMultiByteStr);
       GetOcrWordBoundingBox(v105, &v107);
+    }
+  }
+
+  // Log all recognized lines with their bounding boxes before grouping
+  printf("\n=== All recognized text lines with bounding boxes ===\n");
+  for (size_t i = 0; i < allLines.size(); i++) {
+    printf("Line %zu: '%s'\n", i, allLines[i].content.c_str());
+    printf("  Bounding box: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
+           allLines[i].x, allLines[i].y, allLines[i].width, allLines[i].height);
+    printf("  Center: (%.1f, %.1f)\n", allLines[i].center_x, allLines[i].center_y);
+    printf("\n");
+  }
+
+  // Group lines by proximity
+  vector<vector<OcrLineData>> groupedLines = groupLinesByProximity(allLines);
+  
+  // Write grouped results to output file
+  for (size_t groupIdx = 0; groupIdx < groupedLines.size(); groupIdx++) {
+    if (groupIdx > 0) {
+      out << endl; // Add blank line between groups (speech bubbles)
+    }
+    
+    for (const auto& line : groupedLines[groupIdx]) {
+      out << line.content << endl;
     }
   }
 
