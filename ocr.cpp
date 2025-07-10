@@ -283,10 +283,10 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   // Group lines by proximity
   vector<vector<OcrLineData>> groupedLines = groupLinesByProximity(allLines, imageHeight);
   
-  // Write grouped results to output file with space between groups, all lowercase
+  // Write grouped results to output file: lines in a group on one line, groups separated by newlines, all lowercase
   for (size_t groupIdx = 0; groupIdx < groupedLines.size(); groupIdx++) {
     if (groupIdx > 0) {
-      out << " "; // Add space between groups (speech bubbles)
+      out << "\n\n"; // Newline between groups (speech bubbles)
     }
     for (size_t lineIdx = 0; lineIdx < groupedLines[groupIdx].size(); lineIdx++) {
       string lineContent = groupedLines[groupIdx][lineIdx].content;
