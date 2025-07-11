@@ -48,7 +48,7 @@ typedef __int64(__cdecl *CreateOcrPipeline_t)(__int64, __int64, __int64,
 // Function to calculate distance between two lines
 double calculateDistance(const OcrLineData& line1, const OcrLineData& line2) {
   double dist = sqrt(pow(line1.center_x - line2.center_x, 2) + pow(line1.center_y - line2.center_y, 2));
-#ifdef DEBUG
+#ifdef LOG
   printf("Distance between '%s' (%.1f,%.1f) and '%s' (%.1f,%.1f): %.2f\n", 
          line1.content.substr(0, 20).c_str(), line1.center_x, line1.center_y,
          line2.content.substr(0, 20).c_str(), line2.center_x, line2.center_y, dist);
@@ -57,12 +57,12 @@ double calculateDistance(const OcrLineData& line1, const OcrLineData& line2) {
 }
 
 // Function to group lines by proximity (for speech bubbles)
-vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, int imageHeight, double maxDistancePercent = 0.1) {
-  double maxDistance = imageHeight * maxDistancePercent;
+vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, int imageHeight, double maxDistancePercent = 0.1, double maxDistanceAbsoluteMinimum = 100) {
+  double maxDistance = max(imageHeight * maxDistancePercent, maxDistanceAbsoluteMinimum);
   vector<vector<OcrLineData>> groups;
   vector<bool> used(lines.size(), false);
   
-  #ifdef DEBUG
+  #ifdef LOG
   printf("\n=== Grouping %zu lines with maxDistance=%.2f (%.1f%% of image height %d) ===\n", 
          lines.size(), maxDistance, maxDistancePercent * 100, imageHeight);
   #endif
@@ -74,7 +74,7 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
     currentGroup.push_back(lines[i]);
     used[i] = true;
 
-    #ifdef DEBUG
+    #ifdef LOG
     printf("\nStarting new group %zu with line: '%s' at (%.1f,%.1f)\n",
            groups.size() + 1, lines[i].content.substr(0, 30).c_str(),
            lines[i].center_x, lines[i].center_y);
@@ -107,13 +107,13 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
           if (fabs(dy) > 0) {
             compensatedMaxDistance += verticalCompensation;
           }
-          #ifdef DEBUG
+          #ifdef LOG
           printf("    Checking '%s' vs group line '%s': dist=%.2f, compensatedMax=%.2f (dy=%.2f, verticalComp=%.2f, span=%.2f)\n",
                  lines[j].content.substr(0, 20).c_str(), groupLine.content.substr(0, 20).c_str(),
                  dist, compensatedMaxDistance, dy, verticalCompensation, verticalSpan);
           #endif
           if (dist <= compensatedMaxDistance) {
-            #ifdef DEBUG
+            #ifdef LOG
             printf("  -> Adding '%s' to group (distance: %.2f <= %.2f)\n",
                    lines[j].content.substr(0, 30).c_str(), dist, compensatedMaxDistance);
             #endif
@@ -127,7 +127,7 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
       }
     }
 
-    #ifdef DEBUG
+    #ifdef LOG
     printf("  Group %zu completed with %zu lines\n", groups.size() + 1, currentGroup.size());
     #endif
 
@@ -140,7 +140,7 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
     groups.push_back(currentGroup);
   }
   
-  #ifdef DEBUG
+  #ifdef LOG
   printf("\n=== Created %zu groups total ===\n", groups.size());
   #endif
   
@@ -209,10 +209,8 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   assert(sizeof(img) == 0x20);
   res = RunOcrPipeline(pipeline, &img, opt, &instance);
   assert(res == 0);
-  #ifdef DEBUG
+#ifdef LOG
   printf("Running ocr pipeline...\n");
-  #endif
-#ifdef DEBUG  
   printf("\t ctx: 0x%llx, pipeline: 0x%llx, opt: 0x%llx, instance: "
          "0x%llx\n",
          ctx, pipeline, opt, instance);
@@ -220,7 +218,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   __int64 lc;
   res = GetOcrLineCount(instance, &lc);
   assert(res == 0);
-  #ifdef DEBUG
+  #ifdef LOG
   printf("Recognize %lld lines\n", lc);
   #endif
 
@@ -260,7 +258,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
       lineData.y = bbox[3];
       lineData.center_x = lineData.x + lineData.width / 2;
       lineData.center_y = lineData.y + lineData.height / 2;
-      #ifdef DEBUG
+      #ifdef LOG
       printf("Line %lld: Got bounding box from API: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
              lci, lineData.x, lineData.y, lineData.width, lineData.height);
       #endif
@@ -272,7 +270,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
       lineData.height = 20;
       lineData.center_x = 50;
       lineData.center_y = lineData.y + 10;
-      #ifdef DEBUG
+      #ifdef LOG
       printf("Line %lld: No bounding box available, using fallback: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
              lci, lineData.x, lineData.y, lineData.width, lineData.height);
       #endif
@@ -293,7 +291,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   }
 
   // Log all recognized lines with their bounding boxes before grouping
-  #ifdef DEBUG
+  #ifdef LOG
   printf("\n=== All recognized text lines with bounding boxes ===\n");
   for (size_t i = 0; i < allLines.size(); i++) {
     printf("Line %zu: '%s'\n", i, allLines[i].content.c_str());
