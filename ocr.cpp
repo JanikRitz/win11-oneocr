@@ -313,7 +313,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
     for (size_t lineIdx = 0; lineIdx < groupedLines[groupIdx].size(); lineIdx++) {
       string lineContent = groupedLines[groupIdx][lineIdx].content;
       // Convert to lowercase
-      transform(lineContent.begin(), lineContent.end(), lineContent.begin(), ::tolower);
+      // transform(lineContent.begin(), lineContent.end(), lineContent.begin(), ::tolower);
       out << lineContent;
       // Add space between lines in a group, except after the last line
       if (lineIdx < groupedLines[groupIdx].size() - 1) {
