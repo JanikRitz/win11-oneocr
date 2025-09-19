@@ -28,6 +28,30 @@ typedef struct {
   float center_x, center_y;
 } OcrLineData;
 
+// Structure to hold OCR word data with bounding box
+typedef struct {
+  string content;
+  float x, y, width, height;
+  float center_x, center_y;
+} OcrWordData;
+
+// Simple XML escape helper
+static string escapeXml(const string &s) {
+  string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    switch (c) {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      case '\'': out += "&apos;"; break;
+      default: out.push_back(c);
+    }
+  }
+  return out;
+}
+
 typedef __int64(__cdecl *CreateOcrInitOptions_t)(__int64 *);
 typedef __int64(__cdecl *GetOcrLineCount_t)(__int64, __int64 *);
 typedef __int64(__cdecl *GetOcrLine_t)(__int64, __int64, __int64 *);
@@ -224,6 +248,8 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
 
   // Collect all line data first
   vector<OcrLineData> allLines;
+  // For XML export: keep words per line
+  vector<vector<OcrWordData>> allWordsPerLine;
 
   ofstream out(output_file);
   if (!out.is_open()) {
@@ -277,6 +303,8 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
     }
     
     allLines.push_back(lineData);
+  // Prepare container for this line's words
+  vector<OcrWordData> wordsThisLine;
     
     __int64 lr = 0;
     GetOcrLineWordCount(line, &lr);
@@ -287,7 +315,25 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
       GetOcrWord(line, j, &v105);
       GetOcrWordContent(v105, &lpMultiByteStr);
       GetOcrWordBoundingBox(v105, &v107);
+      if (lpMultiByteStr) {
+        char *wcs = reinterpret_cast<char *>(lpMultiByteStr);
+        OcrWordData wd;
+        wd.content = string(wcs);
+        if (v107) {
+          float* wb = reinterpret_cast<float*>(v107);
+          wd.width = wb[0];
+          wd.height = wb[1];
+          wd.x = wb[2];
+          wd.y = wb[3];
+          wd.center_x = wd.x + wd.width / 2;
+          wd.center_y = wd.y + wd.height / 2;
+        } else {
+          wd.x = 0; wd.y = 0; wd.width = 0; wd.height = 0; wd.center_x = 0; wd.center_y = 0;
+        }
+        wordsThisLine.push_back(wd);
+      }
     }
+    allWordsPerLine.push_back(wordsThisLine);
   }
 
   // Log all recognized lines with their bounding boxes before grouping
@@ -323,6 +369,41 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   }
   out.close();
   printf("OCR results saved to %s\n", output_file.c_str());
+
+  // Write XML export next to the .txt file
+  try {
+    string xml_file = filesystem::path(output_file).replace_extension(".xml").string();
+    ofstream xout(xml_file);
+    if (xout.is_open()) {
+      xout << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+      xout << "<ocrExport source=\"" << escapeXml(output_file) << "\">\n";
+
+      // Write lines with bounding boxes and their words
+      for (size_t i = 0; i < allLines.size(); i++) {
+        const auto &ln = allLines[i];
+        xout << "  <line id=\"" << i << "\" x=\"" << ln.x << "\" y=\"" << ln.y << "\" width=\"" << ln.width << "\" height=\"" << ln.height << "\">\n";
+        xout << "    <text>" << escapeXml(ln.content) << "</text>\n";
+        // words (if available)
+        if (i < allWordsPerLine.size()) {
+          const auto &words = allWordsPerLine[i];
+          for (size_t w = 0; w < words.size(); w++) {
+            const auto &wd = words[w];
+            xout << "    <word id=\"" << w << "\" x=\"" << wd.x << "\" y=\"" << wd.y << "\" width=\"" << wd.width << "\" height=\"" << wd.height << "\">";
+            xout << escapeXml(wd.content) << "</word>\n";
+          }
+        }
+        xout << "  </line>\n";
+      }
+
+      xout << "</ocrExport>\n";
+      xout.close();
+      printf("XML export saved to %s\n", xml_file.c_str());
+    } else {
+      printf("Failed to open XML output: %s\n", xml_file.c_str());
+    }
+  } catch (const std::exception &e) {
+    printf("Exception while writing XML: %s\n", e.what());
+  }
 }
 
 void process_image(const string &file_name, __int64 pipeline, __int64 opt) {
