@@ -180,7 +180,7 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
   return groups;
 }
 
-void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
+void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool verboseXml) {
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
@@ -378,18 +378,20 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
       xout << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
       xout << "<ocrExport source=\"" << escapeXml(output_file) << "\">\n";
 
-      // Write lines with bounding boxes and their words
+      // Write lines with bounding boxes and their words (words only when verboseXml is true)
       for (size_t i = 0; i < allLines.size(); i++) {
         const auto &ln = allLines[i];
         xout << "  <line id=\"" << i << "\" x=\"" << ln.x << "\" y=\"" << ln.y << "\" width=\"" << ln.width << "\" height=\"" << ln.height << "\">\n";
         xout << "    <text>" << escapeXml(ln.content) << "</text>\n";
-        // words (if available)
-        if (i < allWordsPerLine.size()) {
-          const auto &words = allWordsPerLine[i];
-          for (size_t w = 0; w < words.size(); w++) {
-            const auto &wd = words[w];
-            xout << "    <word id=\"" << w << "\" x=\"" << wd.x << "\" y=\"" << wd.y << "\" width=\"" << wd.width << "\" height=\"" << wd.height << "\">";
-            xout << escapeXml(wd.content) << "</word>\n";
+        if (verboseXml) {
+          // words (if available)
+          if (i < allWordsPerLine.size()) {
+            const auto &words = allWordsPerLine[i];
+            for (size_t w = 0; w < words.size(); w++) {
+              const auto &wd = words[w];
+              xout << "    <word id=\"" << w << "\" x=\"" << wd.x << "\" y=\"" << wd.y << "\" width=\"" << wd.width << "\" height=\"" << wd.height << "\">";
+              xout << escapeXml(wd.content) << "</word>\n";
+            }
           }
         }
         xout << "  </line>\n";
@@ -406,7 +408,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt) {
   }
 }
 
-void process_image(const string &file_name, __int64 pipeline, __int64 opt) {
+void process_image(const string &file_name, __int64 pipeline, __int64 opt, bool verboseXml) {
   Mat img = imread(file_name, IMREAD_UNCHANGED);
   if (img.empty()) {
     cout << "Can't read image: " << file_name << endl;
@@ -435,16 +437,34 @@ void process_image(const string &file_name, __int64 pipeline, __int64 opt) {
             .data_ptr = (__int64)reinterpret_cast<char *>(img_rgba.data)};
 
   string output_file = filesystem::path(file_name).replace_extension(".txt").string();
-  ocr(ig, output_file, pipeline, opt);
+  ocr(ig, output_file, pipeline, opt, verboseXml);
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    printf("Usage: ocr.exe <image_path_or_folder>\n");
+    printf("Usage: ocr.exe <image_path_or_folder> [--verbos-xml]\n");
     return 0;
   }
 
-  string input_path = argv[1];
+  string input_path;
+  bool verboseXml = false;
+  // Parse arguments: accept one path and optional --verbos-xml flag
+  for (int i = 1; i < argc; ++i) {
+    string a = argv[i];
+    if (a == "--verbose-xml") {
+      verboseXml = true;
+    } else if (input_path.empty()) {
+      input_path = a;
+    } else {
+      // ignore extra args
+    }
+  }
+
+  if (input_path.empty()) {
+    printf("Usage: ocr.exe <image_path_or_folder> [--verbos-xml]\n");
+    return 0;
+  }
+
   vector<string> image_files;
 
   if (filesystem::is_directory(input_path)) {
@@ -495,7 +515,7 @@ int main(int argc, char *argv[]) {
   assert(res == 0);
 
   for (const auto &file_name : image_files) {
-    process_image(file_name, pipeline, opt);
+    process_image(file_name, pipeline, opt, verboseXml);
   }
 
   return 0;
