@@ -26,6 +26,11 @@ typedef struct {
   string content;
   float x, y, width, height;
   float center_x, center_y;
+  // Store up to three corner coordinates (if provided by the OCR API)
+  int cornerCount;
+  float x1, y1;
+  float x2, y2;
+  float x3, y3;
 } OcrLineData;
 
 // Structure to hold OCR word data with bounding box
@@ -309,6 +314,21 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
         if (py > maxY) maxY = py;
       }
 
+      // Store up to three corner coordinates (use first 3 points)
+      lineData.cornerCount = 0;
+      lineData.x1 = lineData.y1 = lineData.x2 = lineData.y2 = lineData.x3 = lineData.y3 = 0.0f;
+      // Count how many non-zero points we have (consider a point present if either coord != 0)
+      for (int cp = 0; cp < 3; cp++) {
+        float px = coords[cp*2];
+        float py = coords[cp*2 + 1];
+        if (px != 0.0f || py != 0.0f) {
+          lineData.cornerCount++;
+          if (cp == 0) { lineData.x1 = px; lineData.y1 = py; }
+          if (cp == 1) { lineData.x2 = px; lineData.y2 = py; }
+          if (cp == 2) { lineData.x3 = px; lineData.y3 = py; }
+        }
+      }
+
       // Fill lineData with axis-aligned bounding box
       lineData.x = minX;
       lineData.y = minY;
@@ -332,6 +352,8 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
       lineData.height = 20;
       lineData.center_x = 50;
       lineData.center_y = lineData.y + 10;
+      lineData.cornerCount = 0;
+      lineData.x1 = lineData.y1 = lineData.x2 = lineData.y2 = lineData.x3 = lineData.y3 = 0.0f;
       #ifdef LOG
       printf("Line %lld: No bounding box available, using fallback: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
              lci, lineData.x, lineData.y, lineData.width, lineData.height);
@@ -417,7 +439,12 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
       // Write lines with bounding boxes and their words (words only when verboseXml is true)
       for (size_t i = 0; i < allLines.size(); i++) {
         const auto &ln = allLines[i];
-        xout << "  <line id=\"" << i << "\" x=\"" << ln.x << "\" y=\"" << ln.y << "\" width=\"" << ln.width << "\" height=\"" << ln.height << "\">\n";
+  xout << "  <line id=\"" << i << "\" x=\"" << ln.x << "\" y=\"" << ln.y << "\" width=\"" << ln.width << "\" height=\"" << ln.height << "\"";
+  xout << " cornerCount=\"" << ln.cornerCount << "\"";
+  xout << " x1=\"" << ln.x1 << "\" y1=\"" << ln.y1 << "\"";
+  xout << " x2=\"" << ln.x2 << "\" y2=\"" << ln.y2 << "\"";
+  xout << " x3=\"" << ln.x3 << "\" y3=\"" << ln.y3 << "\"";
+  xout << ">\n";
         xout << "    <text>" << escapeXml(ln.content) << "</text>\n";
         if (verboseXml) {
           // words (if available)
