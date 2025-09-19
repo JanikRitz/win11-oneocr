@@ -276,18 +276,54 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
     lineData.content = string(lcs);
     
     if (bbox_ptr) {
-      // Assuming bounding box is stored as [x, y, width, height]
+      // Assuming bounding box is stored as an array of floats containing
+      // coordinates for the polygon corners. Common layouts are either
+      // [TLx, TLy, TRx, TRy, BLx, BLy, BRx, BRy] or a subset like
+      // [TLx, TLy, TRx, TRy, BLx, BLy]. We'll read up to 8 values if
+      // available and compute the axis-aligned bounding box.
       float* bbox = reinterpret_cast<float*>(bbox_ptr);
-      lineData.width = bbox[0];
-      lineData.height = bbox[1];
-      lineData.x = bbox[2];
-      lineData.y = bbox[3];
-      lineData.center_x = lineData.x + lineData.width / 2;
-      lineData.center_y = lineData.y + lineData.height / 2;
-      #ifdef LOG
+
+      // Read coordinates safely. We don't have a count, so assume at
+      // least 6 floats (3 points) but allow up to 8.
+      float coords[8] = {0,0,0,0,0,0,0,0};
+      // copy up to 8 floats from bbox into coords
+      for (int k = 0; k < 8; k++) {
+        // Try/catch isn't available for raw pointer reads; assume pointer
+        // is valid for at least 6 floats as returned by the API.
+        coords[k] = bbox[k];
+      }
+
+      // Determine min/max X/Y across available points
+      float minX = coords[0];
+      float minY = coords[1];
+      float maxX = coords[0];
+      float maxY = coords[1];
+      for (int p = 0; p < 4; p++) {
+        float px = coords[p*2];
+        float py = coords[p*2 + 1];
+        // If both values are zero and p >= 3 (unused slots), break
+        if (p >= 3 && px == 0.0f && py == 0.0f) break;
+        if (px < minX) minX = px;
+        if (py < minY) minY = py;
+        if (px > maxX) maxX = px;
+        if (py > maxY) maxY = py;
+      }
+
+      // Fill lineData with axis-aligned bounding box
+      lineData.x = minX;
+      lineData.y = minY;
+      lineData.width = maxX - minX;
+      lineData.height = maxY - minY;
+      // Guard against negative sizes
+      if (lineData.width < 0) lineData.width = 0;
+      if (lineData.height < 0) lineData.height = 0;
+
+      lineData.center_x = lineData.x + lineData.width / 2.0f;
+      lineData.center_y = lineData.y + lineData.height / 2.0f;
+#ifdef LOG
       printf("Line %lld: Got bounding box from API: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n", 
              lci, lineData.x, lineData.y, lineData.width, lineData.height);
-      #endif
+#endif
     } else {
       // Fallback: use line index as approximate position
       lineData.x = 0;
