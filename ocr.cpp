@@ -74,6 +74,19 @@ typedef __int64(__cdecl *OcrInitOptionsSetUseModelDelayLoad_t)(__int64, char);
 typedef __int64(__cdecl *CreateOcrPipeline_t)(__int64, __int64, __int64,
                                               __int64 *);
 
+// Exit codes to indicate specific failure modes (0 = success)
+enum ExitCode {
+  EXIT_SUCCESS_CODE = 0,
+  EXIT_USAGE = 1,
+  EXIT_INVALID_PATH = 2,
+  EXIT_IMAGE_READ_FAILED = 3,
+  EXIT_UNSUPPORTED_IMAGE_TYPE = 4,
+  EXIT_DLL_LOAD_FAILED = 5,
+  EXIT_MODEL_LOAD_FAILED = 6,
+  EXIT_OCR_RUNTIME_ERROR = 7,
+  EXIT_OUTPUT_WRITE_FAILED = 8
+};
+
 // Function to calculate distance between two lines
 double calculateDistance(const OcrLineData& line1, const OcrLineData& line2) {
   double dist = sqrt(pow(line1.center_x - line2.center_x, 2) + pow(line1.center_y - line2.center_y, 2));
@@ -185,11 +198,11 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
   return groups;
 }
 
-void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool verboseXml) {
+int ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool verboseXml) {
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
-    return;
+    return EXIT_DLL_LOAD_FAILED;
   }
   
   // Store image height for maxDistance calculation
@@ -235,9 +248,15 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
   }
   printf("\n");
 #endif
-  assert(sizeof(img) == 0x20);
+  if (sizeof(img) != 0x20) {
+    std::cerr << "Unexpected Img struct size" << std::endl;
+    return EXIT_OCR_RUNTIME_ERROR;
+  }
   res = RunOcrPipeline(pipeline, &img, opt, &instance);
-  assert(res == 0);
+  if (res != 0) {
+    std::cerr << "RunOcrPipeline failed with code: " << res << std::endl;
+    return EXIT_OCR_RUNTIME_ERROR;
+  }
 #ifdef LOG
   printf("Running ocr pipeline...\n");
   printf("\t ctx: 0x%llx, pipeline: 0x%llx, opt: 0x%llx, instance: "
@@ -246,7 +265,10 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
 #endif
   __int64 lc;
   res = GetOcrLineCount(instance, &lc);
-  assert(res == 0);
+  if (res != 0) {
+    std::cerr << "GetOcrLineCount failed with code: " << res << std::endl;
+    return EXIT_OCR_RUNTIME_ERROR;
+  }
   #ifdef LOG
   printf("Recognize %lld lines\n", lc);
   #endif
@@ -259,7 +281,7 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
   ofstream out(output_file);
   if (!out.is_open()) {
     cerr << "Failed to open output file: " << output_file << endl;
-    return;
+    return EXIT_OUTPUT_WRITE_FAILED;
   }
 
   for (__int64 lci = 0; lci < lc; lci++) {
@@ -463,19 +485,21 @@ void ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool
       xout << "</ocrExport>\n";
       xout.close();
       printf("XML export saved to %s\n", xml_file.c_str());
-    } else {
-      printf("Failed to open XML output: %s\n", xml_file.c_str());
-    }
+      } else {
+        printf("Failed to open XML output: %s\n", xml_file.c_str());
+      }
   } catch (const std::exception &e) {
     printf("Exception while writing XML: %s\n", e.what());
   }
+
+  return EXIT_SUCCESS_CODE;
 }
 
-void process_image(const string &file_name, __int64 pipeline, __int64 opt, bool verboseXml) {
+int process_image(const string &file_name, __int64 pipeline, __int64 opt, bool verboseXml) {
   Mat img = imread(file_name, IMREAD_UNCHANGED);
   if (img.empty()) {
     cout << "Can't read image: " << file_name << endl;
-    return;
+    return EXIT_IMAGE_READ_FAILED;
   }
 
   Mat img_rgba;
@@ -485,7 +509,7 @@ void process_image(const string &file_name, __int64 pipeline, __int64 opt, bool 
     img_rgba = img;
   } else {
     cout << "Image type not supported: " << file_name << endl;
-    return;
+    return EXIT_UNSUPPORTED_IMAGE_TYPE;
   }
 
   int rows = img_rgba.rows;
@@ -500,13 +524,13 @@ void process_image(const string &file_name, __int64 pipeline, __int64 opt, bool 
             .data_ptr = (__int64)reinterpret_cast<char *>(img_rgba.data)};
 
   string output_file = filesystem::path(file_name).replace_extension(".txt").string();
-  ocr(ig, output_file, pipeline, opt, verboseXml);
+  return ocr(ig, output_file, pipeline, opt, verboseXml);
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
     printf("Usage: ocr.exe <image_path_or_folder> [--verbos-xml]\n");
-    return 0;
+    return EXIT_USAGE;
   }
 
   string input_path;
@@ -525,7 +549,7 @@ int main(int argc, char *argv[]) {
 
   if (input_path.empty()) {
     printf("Usage: ocr.exe <image_path_or_folder> [--verbos-xml]\n");
-    return 0;
+    return EXIT_USAGE;
   }
 
   vector<string> image_files;
@@ -541,13 +565,13 @@ int main(int argc, char *argv[]) {
     image_files.push_back(input_path);
   } else {
     cout << "Invalid path: " << input_path << endl;
-    return -1;
+    return EXIT_INVALID_PATH;
   }
 
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     cerr << "Failed to load DLL: " << GetLastError() << endl;
-    return -1;
+    return EXIT_DLL_LOAD_FAILED;
   }
 
   CreateOcrInitOptions_t CreateOcrInitOptions =
@@ -563,23 +587,43 @@ int main(int argc, char *argv[]) {
 
   __int64 ctx = 0, pipeline = 0, opt = 0;
   __int64 res = CreateOcrInitOptions(&ctx);
-  assert(res == 0);
+  if (res != 0) {
+    cerr << "CreateOcrInitOptions failed: " << res << endl;
+    return EXIT_MODEL_LOAD_FAILED;
+  }
   res = OcrInitOptionsSetUseModelDelayLoad(ctx, 0);
-  assert(res == 0);
+  if (res != 0) {
+    cerr << "OcrInitOptionsSetUseModelDelayLoad failed: " << res << endl;
+    return EXIT_MODEL_LOAD_FAILED;
+  }
 
   const char *key = {"kj)TGtrK>f]b[Piow.gU+nC@s\"\"\"\"\"\"4"};
   res = CreateOcrPipeline((__int64)"oneocr.onemodel", (__int64)key, ctx, &pipeline);
-  assert(res == 0);
+  if (res != 0) {
+    cerr << "CreateOcrPipeline failed: " << res << endl;
+    return EXIT_MODEL_LOAD_FAILED;
+  }
   printf("OCR model loaded...\n");
 
   res = CreateOcrProcessOptions(&opt);
-  assert(res == 0);
+  if (res != 0) {
+    cerr << "CreateOcrProcessOptions failed: " << res << endl;
+    return EXIT_MODEL_LOAD_FAILED;
+  }
   res = OcrProcessOptionsSetMaxRecognitionLineCount(opt, 1000);
-  assert(res == 0);
-
-  for (const auto &file_name : image_files) {
-    process_image(file_name, pipeline, opt, verboseXml);
+  if (res != 0) {
+    cerr << "OcrProcessOptionsSetMaxRecognitionLineCount failed: " << res << endl;
+    return EXIT_MODEL_LOAD_FAILED;
   }
 
-  return 0;
+  int overall_status = EXIT_SUCCESS_CODE;
+  for (const auto &file_name : image_files) {
+    int st = process_image(file_name, pipeline, opt, verboseXml);
+    if (st != EXIT_SUCCESS_CODE && overall_status == EXIT_SUCCESS_CODE) {
+      // record the first non-success code
+      overall_status = st;
+    }
+  }
+
+  return overall_status;
 }
