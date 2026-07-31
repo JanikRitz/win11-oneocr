@@ -35,5 +35,12 @@ also add the `opencv_world460.dll`
 
 ## Build
 
-Install VS with MSVC / C++ packages
-Use `x64 Native Tools Command Prompt for VS 20XX` to build the app for x64 systems
+Install VS with MSVC / C++ packages.
+Use `x64 Native Tools Command Prompt for VS 20XX` to build the app for x64 systems.
+
+The build scripts now use `/EHsc` for C++ exception handling and will look for OpenCV in either:
+
+- the `OPENCV_DIR` environment variable, or
+- common install locations such as `C:\Tools\OpenCV_4_6\build`
+
+Make sure the OpenCV 4.6.0 headers and `opencv_world460.lib` are available before building.

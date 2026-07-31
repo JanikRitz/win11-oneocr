@@ -57,6 +57,22 @@ static string escapeXml(const string &s) {
   return out;
 }
 
+#ifdef LOG
+static void logPathInfo(const string &label, const filesystem::path &p) {
+  std::error_code ec;
+  const bool exists = filesystem::exists(p, ec);
+  const bool is_file = filesystem::is_regular_file(p, ec);
+  const bool is_dir = filesystem::is_directory(p, ec);
+  const filesystem::path abs_path = filesystem::absolute(p, ec);
+  printf("%s: '%s'\n", label.c_str(), p.string().c_str());
+  printf("  absolute: '%s'\n", ec ? "<unresolved>" : abs_path.string().c_str());
+  printf("  exists=%s is_file=%s is_dir=%s\n",
+         exists ? "true" : "false",
+         is_file ? "true" : "false",
+         is_dir ? "true" : "false");
+}
+#endif
+
 typedef __int64(__cdecl *CreateOcrInitOptions_t)(__int64 *);
 typedef __int64(__cdecl *GetOcrLineCount_t)(__int64, __int64 *);
 typedef __int64(__cdecl *GetOcrLine_t)(__int64, __int64, __int64 *);
@@ -199,11 +215,18 @@ vector<vector<OcrLineData>> groupLinesByProximity(vector<OcrLineData>& lines, in
 }
 
 int ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool verboseXml) {
+#ifdef LOG
+  printf("Loading OCR DLL from current working directory...\n");
+  logPathInfo("oneocr.dll", filesystem::path("oneocr.dll"));
+#endif
   HINSTANCE hDLL = LoadLibraryA("oneocr.dll");
   if (hDLL == NULL) {
     std::cerr << "Failed to load DLL: " << GetLastError() << std::endl;
     return EXIT_DLL_LOAD_FAILED;
   }
+#ifdef LOG
+  printf("OCR DLL loaded successfully.\n");
+#endif
   
   // Store image height for maxDistance calculation
   int imageHeight = img.row;
@@ -452,7 +475,7 @@ int ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool 
 
   // Write XML export next to the .txt file
   try {
-    string xml_file = filesystem::path(output_file).replace_extension(".xml").string();
+    string xml_file = filesystem::path(output_file).replace_extension(".ocr.xml").string();
     ofstream xout(xml_file);
     if (xout.is_open()) {
       xout << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
@@ -496,11 +519,29 @@ int ocr(Img img, const string &output_file, __int64 pipeline, __int64 opt, bool 
 }
 
 int process_image(const string &file_name, __int64 pipeline, __int64 opt, bool verboseXml) {
+#ifdef LOG
+  printf("Attempting to load image from: '%s'\n", file_name.c_str());
+  logPathInfo("Image file", filesystem::path(file_name));
+  HMODULE opencvModule = LoadLibraryA("opencv_world480.dll");
+  if (!opencvModule) {
+    printf("LoadLibraryA(opencv_world480.dll) failed with error %lu\n", GetLastError());
+  } else {
+    printf("LoadLibraryA(opencv_world480.dll) succeeded\n");
+    FreeLibrary(opencvModule);
+  }
+#endif
   Mat img = imread(file_name, IMREAD_UNCHANGED);
   if (img.empty()) {
     cout << "Can't read image: " << file_name << endl;
+#ifdef LOG
+    printf("imread returned an empty matrix for '%s'\n", file_name.c_str());
+#endif
     return EXIT_IMAGE_READ_FAILED;
   }
+#ifdef LOG
+  printf("Image loaded successfully: '%s' (%d x %d, %d channels)\n",
+         file_name.c_str(), img.rows, img.cols, img.channels());
+#endif
 
   Mat img_rgba;
   if (img.channels() == 3) {
@@ -554,14 +595,29 @@ int main(int argc, char *argv[]) {
 
   vector<string> image_files;
 
+#ifdef LOG
+  printf("Current working directory: %s\n", filesystem::current_path().string().c_str());
+  printf("Input argument: %s\n", input_path.c_str());
+  logPathInfo("Input path", filesystem::path(input_path));
+#endif
+
   if (filesystem::is_directory(input_path)) {
+#ifdef LOG
+    printf("Scanning directory for image files...\n");
+#endif
     for (const auto &entry : filesystem::directory_iterator(input_path)) {
       if (entry.is_regular_file() && 
           (entry.path().extension() == ".png" || entry.path().extension() == ".jpg")) {
+#ifdef LOG
+        printf("Found image candidate: %s\n", entry.path().string().c_str());
+#endif
         image_files.push_back(entry.path().string());
       }
     }
   } else if (filesystem::is_regular_file(input_path)) {
+#ifdef LOG
+    printf("Input path is a regular file.\n");
+#endif
     image_files.push_back(input_path);
   } else {
     cout << "Invalid path: " << input_path << endl;
